@@ -1,0 +1,361 @@
+---
+title: "stat445 final"
+output:
+  word_document: default
+  html_document: default
+date: "2022-12-05"
+---
+
+# Task 1: Model Building
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(GGally)
+library(car)
+library(gridExtra)
+library(forecast)
+library(leaps)
+library(AICcmodavg)
+library(MASS)
+library(qpcR)
+library(MuMIn)
+library(sensemakr)
+library(caret)
+library(plyr)
+library(asbio)
+```
+
+## [Comprehensive MC Model]{.underline}
+
+#### 1. Read in data. Remove duplicate rows and columns that have over 85% of repeated values or NA. Remove rows that have NA for the response variables.
+
+```{r, warning=FALSE, message=FALSE}
+MC <- read.csv("MC_model_original_data.csv")
+MC <- unique(MC)
+MC2 <- MC[ , which(colMeans(!is.na(MC))>.85)]
+MC <- MC %>% dplyr::select(-Nitrite_mgL_LAG,	-Nitrate_mgL_LAG, -OrthoP_mgL_LAG, -Nox_mgL_LAG)
+MC <- cbind(MC$ELISA_MC.ANA.SXT , MC2)
+MC <- na.omit(MC)
+```
+
+#### 2. Delete other variables from data frame.
+
+-   siteID and DateTime are non numerical/irrelevant
+
+-   anaC_cp100mL_LAG and sxtA_cp100mL_LAG because anatoxin and saxitoxin weren't used for MC
+
+```{r, warning=FALSE, message=FALSE}
+MC <- MC %>% dplyr::select(-DateTime, -siteID, -anaC_cp100mL_LAG, -sxtA_cp100mL_LAG )
+```
+
+#### 3. Wind direction as a categorical variable. Degrees become north, east, south, or west (did not end up using).
+
+```{r, warning=FALSE, message=FALSE}
+#MC$direction <- cut(MC$WindDirInst_deg, breaks=c(-1, 45, 135, 225, 315, 360), labels=c('N','E', 'S', 'W', 'N'))
+
+#MC <- MC %>% dplyr::select(-WindDirInst_deg)
+```
+
+#### 4. Create MC model with remaining variables.
+
+```{r, warning=FALSE, message=FALSE}
+MCmod1 <- lm(ELISA_microcystin_ugL~	WTemp_C +	Secchi_meters +	pH +	SpCond_uScm +		Ammonia_mgL_LAG +	TP_mgL_LAG  +	NtoP_ratio_LAG + Micro_mcyE_cp100mL_LAG +	Plank_mcyE_cp100mL_LAG +	changeBP + WindSpInst_mph + WindDirInst_deg +	WindSpAnt24_mph +	WindDirAnt24_deg +	Sum7d_precip +	BarPressInst_inhg +	LkLevelChg24_Ave7day +	LkLevelChg24_Ave7dayABS +	PAR_1dSUM + Dis_7dAve + Dis_14dAve + PAR_14dAVG + LkLevel_dev_springave + LkLevelChg14day + Rain72W_in + PAR_7dAVG + PAR_5dAVG + PAR_3dAVG + TN_mgL_LAG + LkLevelChg24_ft + Rain48W_in + Ana_mcyE_cp100mL_LAG + Dis_30dAve + Sum14d_precip, data = MC)
+```
+
+#### 5. Check for multicollinearity and remove from the model above one of the two variables that are perfectly correlated.
+
+```{r, warning=FALSE, message=FALSE}
+cor(MC) 
+alias(MCmod1, complete=TRUE, partial=FALSE)
+MC <- MC %>% dplyr::select(-MCx12.5, -LkLevelChg7day, -RainD_1, -RainD_2, -RainD_3)
+```
+
+#### 6. Check for large VIF values of explanatory variables. Remove variables one by one from data frame and model until all are \< 5. (exceptions made for final model variables whose vif we could not get under 5)
+
+```{r, warning=FALSE, message=FALSE}
+vif(MCmod1) 
+
+MC <- MC %>% dplyr::select(-Dis_7dAve , -Dis_14dAve,-Dis_30dAve, -PAR_14dAVG, -LkLevel_dev_springave, -LkLevelChg14day, -Rain72W_in, -PAR_7dAVG, -PAR_5dAVG, -PAR_3dAVG, -TN_mgL_LAG, -LkLevelChg24_ft, -Rain48W_in, -Ana_mcyE_cp100mL_LAG, -Sum14d_precip, -BarPressInst_inhg) 
+
+MCmod2 <- lm(ELISA_microcystin_ugL~	WTemp_C +	Secchi_meters +	pH +	SpCond_uScm +		Ammonia_mgL_LAG +	TP_mgL_LAG  +	NtoP_ratio_LAG + Micro_mcyE_cp100mL_LAG +	Plank_mcyE_cp100mL_LAG +	changeBP + WindDirInst_deg +	WindDirAnt24_deg +	Sum7d_precip  +	LkLevelChg24_Ave7day +	LkLevelChg24_Ave7dayABS +	PAR_1dSUM, data=MC)
+
+vif(MCmod2)
+```
+
+#### 7. Test transformations of final model variables and create new transformed model
+
+```{r, warning=FALSE, message=FALSE}
+par(mfrow=c(2,2))
+plot(ELISA_microcystin_ugL~WTemp_C, data=MC)
+plot(ELISA_microcystin_ugL~TP_mgL_LAG, data=MC)
+plot(ELISA_microcystin_ugL~Micro_mcyE_cp100mL_LAG, data=MC)
+plot(ELISA_microcystin_ugL~Plank_mcyE_cp100mL_LAG, data=MC)
+
+par(mfrow=c(2,2))
+plot(ELISA_microcystin_ugL~I(1/(WTemp_C)), data=MC)
+plot(ELISA_microcystin_ugL~I((TP_mgL_LAG)^2), data=MC)
+plot(ELISA_microcystin_ugL~I((Micro_mcyE_cp100mL_LAG)^.5), data=MC)
+plot(ELISA_microcystin_ugL~I((Plank_mcyE_cp100mL_LAG)^.25), data=MC)
+
+MCmodt <- lm(ELISA_microcystin_ugL~	I(1/(WTemp_C)) +	Secchi_meters +	pH +	SpCond_uScm +		Ammonia_mgL_LAG +	I((TP_mgL_LAG)^2)  +	NtoP_ratio_LAG + I((Micro_mcyE_cp100mL_LAG)^.5) +	I((Plank_mcyE_cp100mL_LAG)^.25) +	changeBP  + WindDirInst_deg +	WindDirAnt24_deg +	Sum7d_precip +	LkLevelChg24_Ave7day +	LkLevelChg24_Ave7dayABS +	PAR_1dSUM, data = MC)
+```
+
+#### 8. Narrow down model to 6 variables using AICc model selection
+
+```{r, warning=FALSE, message=FALSE}
+options(na.action = "na.fail")  
+
+allModels <- dredge(MCmodt, rank = "AICc",
+                   extra = "Cp", m.max = 6, m.min = 6)
+
+subset(allModels, delta < 4)
+```
+
+```{r, warning=FALSE, message=FALSE}
+topModel <- eval(attributes(allModels)$model.calls$'4176')
+
+topModel$coefficients
+
+summary(MuMIn::get.models(allModels,1)[[1]])
+```
+
+```{r, warning=FALSE, message=FALSE}
+MCmodAICc <- lm(ELISA_microcystin_ugL~ SpCond_uScm + I(1/(WTemp_C)) + I((Micro_mcyE_cp100mL_LAG)^0.5) + LkLevelChg24_Ave7day + I((TP_mgL_LAG)^2) + I((Plank_mcyE_cp100mL_LAG)^0.25), data=MC)
+AICc(MCmodAICc)
+summary(MCmodAICc)
+```
+
+#### 9. Compare to AIC selection
+
+```{r, warning=FALSE, message=FALSE}
+stepAIC(MCmodt, criteria = "AIC", trace=0)
+```
+
+```{r, warning=FALSE, message=FALSE}
+MCmodAIC <- lm(ELISA_microcystin_ugL~ Ammonia_mgL_LAG + SpCond_uScm + WindDirInst_deg + I(1/(WTemp_C)) + I((Micro_mcyE_cp100mL_LAG)^0.5) + LkLevelChg24_Ave7day + I((TP_mgL_LAG)^2) + I((Plank_mcyE_cp100mL_LAG)^0.25), data=MC)
+AICc(MCmodAIC)
+```
+
+#### 10. Final model from paper (same model chosen by AICc except with Wind Direction instead of Specific Conductance)
+
+```{r, warning=FALSE, message=FALSE}
+MCmodfinal <- lm(ELISA_microcystin_ugL~ WindDirInst_deg + I(1/(WTemp_C)) + I((Micro_mcyE_cp100mL_LAG)^0.5) + LkLevelChg24_Ave7day + I((TP_mgL_LAG)^2) + I((Plank_mcyE_cp100mL_LAG)^0.25), data=MC)
+AICc(MCmodfinal)
+summary(MCmodfinal)
+```
+
+#### 11. Compare PRESS statistics
+
+```{r, warning=FALSE, message=FALSE}
+press(MCmodAICc)
+press(MCmodAIC)
+press(MCmodfinal)
+```
+
+#### 12. Sensitivity and specificity of our final MC model
+
+-   decision threshold = 1.6 μg/L microcystin
+
+```{r, warning=FALSE, message=FALSE}
+threshold=1.6
+
+predicted_values <- ifelse(predict(MCmodAICc,type="response")>threshold, 1, 0)
+
+actual_values <- MC$ELISA_microcystin_ugL
+
+conf_matrix<-table(predicted_values,actual_values)
+conf_matrix
+```
+
+```{r, warning=FALSE, message=FALSE}
+true.pos = 7
+false.pos = 1
+true.neg = 40
+false.neg = 1
+
+MCsens <- (true.pos)/(true.pos+false.neg)
+MCsens
+MCspec <- (true.neg)/(true.neg+false.pos)
+MCspec
+```
+
+## [Comprehensive MIX Model]{.underline}
+
+#### 1. Get rid of duplicates, columns with more than 85% NAs, and rows with NAs in the response variable column.
+
+```{r, warning=FALSE, message=FALSE}
+MIX <- read.csv("MIX_model_original_data.csv")
+MIX <- unique(MIX)
+MIX2 <- MIX[ , which(colMeans(!is.na(MIX))>.85)]
+MIX <- MIX %>% dplyr::select(-Nitrite_mgL_LAG, -Nitrate_mgL_LAG, -OrthoP_mgL_LAG, -Nox_mgL_LAG)
+MIX <- cbind(MIX$ELISA_MC.ANA.SXT , MIX2)
+MIX <- MIX[!is.na(MIX$`MIX$ELISA_MC.ANA.SXT`),]
+MIX <- MIX %>% dplyr::select(-DateTime, -siteID)
+```
+
+#### 2. Create MIX model with remaining variables.
+
+```{r, warning=FALSE, message=FALSE}
+MIXmod1 <- lm(MIX$`MIX$ELISA_MC.ANA.SXT`~	WTemp_C +	Secchi_meters +	pH +	SpCond_uScm	 + Ammonia_mgL_LAG + TP_mgL_LAG +	NtoP_ratio_LAG +	Micro_mcyE_cp100mL_LAG +	Plank_mcyE_cp100mL_LAG + anaC_cp100mL_LAG +	sxtA_cp100mL_LAG +	WindSpInst_mph +	WindDirInst_deg +	WindDirAnt24_deg +	Sum7d_precip + BarPressInst_inhg +	LkLevelChg24_ft +	LkLevelChg14day +	LkLevelChg24_Ave7dayABS + changeBP + WindSpAnt24_mph + Dis_dm3 + Dis_7dAve + Dis_14dAve + Dis_dm2 + Dis_dm1 + Rain72W_in + Rain48W_in + PAR_14dAVG + PAR_7dAVG + PAR_5dAVG + Sum14d_precip + TN_mgL_LAG + Ana_mcyE_cp100mL_LAG + LkLevel_dev_springave + LkLevelChg24_Ave7day + PAR_1dSUM + PAR_3dAVG + Dis_30dAve, data=MIX)
+
+```
+
+#### 3. Identify multicollinearity and remove variables from the model above.
+
+```{r, warning=FALSE, message=FALSE}
+cor(MIX)
+alias(MIXmod1, complete=TRUE, partial=FALSE)
+MIX <- MIX %>% dplyr::select(-MCx12.5, -LkLevelChg7day, -RainD_1, -RainD_2, -RainD_3)
+```
+
+#### 
+
+#### 4. Check for large VIF values and remove those variables one by from data frame and model one until all are \<5. (with exceptions for final model variables with vif \>5)
+
+```{r, warning=FALSE, message=FALSE}
+vif(MIXmod1) 
+
+MIX <- MIX %>% dplyr::select(-Dis_dm3, -Dis_7dAve, -Dis_14dAve, -Dis_dm2, -Dis_dm1, -Rain72W_in, -Rain48W_in, -PAR_14dAVG, -PAR_7dAVG, -PAR_5dAVG, -Sum14d_precip, -TN_mgL_LAG, -Ana_mcyE_cp100mL_LAG, -LkLevel_dev_springave, -LkLevelChg24_Ave7day, -PAR_1dSUM, -PAR_3dAVG, -Dis_30dAve)
+
+MIXmod2 <- lm( MIX$`MIX$ELISA_MC.ANA.SXT` ~ WTemp_C +	Secchi_meters +	pH +	SpCond_uScm	 + Ammonia_mgL_LAG + TP_mgL_LAG +	NtoP_ratio_LAG  +	Plank_mcyE_cp100mL_LAG + Micro_mcyE_cp100mL_LAG + anaC_cp100mL_LAG +	sxtA_cp100mL_LAG +	WindSpInst_mph +	WindDirInst_deg +	WindDirAnt24_deg +	Sum7d_precip + BarPressInst_inhg +	LkLevelChg24_ft +	LkLevelChg14day +	LkLevelChg24_Ave7dayABS + changeBP + WindSpAnt24_mph, data=MIX)
+
+vif(MIXmod2)
+```
+
+#### 5. Test transformations of final model variables and construct new model
+
+```{r, warning=FALSE, message=FALSE}
+par(mfrow=c(3,3))
+plot(MIX$`MIX$ELISA_MC.ANA.SXT`~TP_mgL_LAG, data=MIX)
+plot(MIX$`MIX$ELISA_MC.ANA.SXT`~Plank_mcyE_cp100mL_LAG, data=MIX)
+plot(MIX$`MIX$ELISA_MC.ANA.SXT`~anaC_cp100mL_LAG, data=MIX)
+plot(MIX$`MIX$ELISA_MC.ANA.SXT`~sxtA_cp100mL_LAG, data=MIX)
+plot(MIX$`MIX$ELISA_MC.ANA.SXT`~LkLevelChg14day, data=MIX)
+
+par(mfrow=c(3,3))
+plot(MIX$`MIX$ELISA_MC.ANA.SXT`~I((TP_mgL_LAG)^2), data=MIX)
+plot(MIX$`MIX$ELISA_MC.ANA.SXT`~I((Plank_mcyE_cp100mL_LAG)^.25), data=MIX)
+plot(MIX$`MIX$ELISA_MC.ANA.SXT`~I(1/(anaC_cp100mL_LAG)), data=MIX)
+plot(MIX$`MIX$ELISA_MC.ANA.SXT`~I((sxtA_cp100mL_LAG)^.5), data=MIX)
+plot(MIX$`MIX$ELISA_MC.ANA.SXT`~I(1/(LkLevelChg14day)), data=MIX)
+
+MIXmodt <- lm( MIX$`MIX$ELISA_MC.ANA.SXT` ~ WTemp_C +	Secchi_meters +	pH +	SpCond_uScm	 +			Ammonia_mgL_LAG + I((TP_mgL_LAG)^2) +	NtoP_ratio_LAG +	Micro_mcyE_cp100mL_LAG + I((Plank_mcyE_cp100mL_LAG)^.25) + I(1/(anaC_cp100mL_LAG)) +	I((sxtA_cp100mL_LAG)^.5) +	WindSpInst_mph +	WindDirInst_deg +	WindSpAnt24_mph +	WindDirAnt24_deg +	Sum7d_precip + BarPressInst_inhg +	changeBP +	LkLevelChg24_ft +	I(1/(LkLevelChg14day)) +	LkLevelChg24_Ave7dayABS, data=MIX)
+```
+
+#### 6. Narrow down model to 6 variables based on AICc
+
+```{r, warning=FALSE, message=FALSE}
+options(na.action = "na.fail")  
+
+allModels <- dredge(MIXmodt, rank = "AICc",
+                    extra = "Cp", m.max = 6, m.min = 6)
+
+subset(allModels, delta < 4)
+```
+
+```{r, warning=FALSE, message=FALSE}
+topModel <- eval(attributes(allModels)$model.calls$'131104')
+
+topModel$coefficients
+
+summary(MuMIn::get.models(allModels,1)[[1]])
+```
+
+```{r, warning=FALSE, message=FALSE}
+MIXmodAICc <- lm(MIX$`MIX$ELISA_MC.ANA.SXT` ~ I((Plank_mcyE_cp100mL_LAG)^(1/4)) + I((sxtA_cp100mL_LAG)^(1/2)) + I((TP_mgL_LAG)^2) + I(1/(anaC_cp100mL_LAG)) + I(1/(LkLevelChg14day)) + WindDirInst_deg, data = MIX )
+AICc(MIXmodAICc)
+summary(MIXmodAICc)
+```
+
+#### 9. Compare to AIC selection
+
+```{r, warning=FALSE, message=FALSE}
+stepAIC(MIXmodt, criteria = "AIC", trace=0)
+```
+
+```{r, warning=FALSE, message=FALSE}
+MIXmodAIC <- lm( MIX$`MIX$ELISA_MC.ANA.SXT` ~	pH +	SpCond_uScm	 +	Ammonia_mgL_LAG + I((TP_mgL_LAG)^2) + I((Plank_mcyE_cp100mL_LAG)^.25) + I(1/(anaC_cp100mL_LAG)) + I((sxtA_cp100mL_LAG)^.5) +	WindSpInst_mph +	WindDirInst_deg +	WindSpAnt24_mph +	Sum7d_precip + BarPressInst_inhg +	LkLevelChg24_ft +	I(1/(LkLevelChg14day)), data=MIX)
+AICc(MIXmodAIC)
+```
+
+#### 10. Final model from paper (Same one already selected by AICc)
+
+```{r, warning=FALSE, message=FALSE}
+MIXmodfinal <- lm(MIX$`MIX$ELISA_MC.ANA.SXT` ~ I((Plank_mcyE_cp100mL_LAG)^0.25) + I((sxtA_cp100mL_LAG)^0.5) + I((TP_mgL_LAG)^2) + I(1/(anaC_cp100mL_LAG)) + I(1/(LkLevelChg14day)) + WindDirInst_deg, data = MIX )
+AICc(MIXmodfinal)
+summary(MIXmodfinal)
+```
+
+#### 11. Compare PRESS statistics
+
+```{r, warning=FALSE, message=FALSE}
+press(MIXmodAICc)
+press(MIXmodAIC)
+press(MIXmodfinal)
+```
+
+#### 12. Sensitivity and specificity of our final MIX model
+
+-   Threshold was anatoxin-a standard = 20 ug/L
+
+```{r, warning=FALSE, message=FALSE}
+threshold=20
+
+predicted_values <- ifelse(predict(MIXmodAICc,type="response")>threshold, 1, 0)
+
+actual_values <- MIX$`MIX$ELISA_MC.ANA.SXT`
+
+conf_matrix<-table(predicted_values,actual_values)
+conf_matrix
+```
+
+```{r, warning=FALSE, message=FALSE}
+true.pos = 8
+false.pos = 2
+true.neg = 40
+false.neg = 0
+
+MIXsens <- (true.pos)/(true.pos+false.neg)
+MIXsens
+MIXspec <- (true.neg)/(true.neg+false.pos)
+MIXspec
+```
+
+### Table 5 Recreation:
+
+| Model            | AICc  | PRESS | R-squared | Sensitivity | Specificity |
+|------------------|-------|-------|-----------|-------------|-------------|
+| Comprehensive MC | 79.45 | 14.73 | 0.87      | 0.88        | 0.98        |
+
+MC = 0.5237 + 0.0027\*SQUAREROOT[Micro_mcyE] + 0.0439\*QUADROOT[Plank_mcyE] + 307.9059\*SQUARE[TP] - 34.7391\*INVERSE[WT] + 10.4294\*LL_7day + 0.0026\*[SpCond]
+
+|                   |        |         |      |     |      |
+|-------------------|--------|---------|------|-----|------|
+| Comprehensive MIX | 340.13 | 2487.38 | 0.86 | 1.0 | 0.95 |
+
+MIX = -12.20 + 0.4504\*QUADROOT[Plank_mcyE] + 0.0167\*SQUAREROOT[sxtA] + 4616\*SQUARE[TP] + 2688\*INVERSE[anaC] - 0.0220\*INVERSE[LL_14day] + 0.0175\*WindDir
+
+# Task 2: Paper Critiques
+
+### Strengths
+
+This paper gave adequate background information on data collection, laboratory analysis, and quality control in section 2. The subsections were useful in understanding what ELISA was for nutrient analysis as well as what the minimum reporting levels were for the nutrients, though not necessary for model recreation. In section 2.4, *Data Analysis,* it was clear that multiple regression was used, the four different models built, and what the independent and dependent variables were- specifically the comprehensive MIX model response variable which was more complicated but well explained. Mention of Ohio state guidelines for toxins and which thresholds were used for both models also made it easy to compute sensitivity and specificity. Additionally, the description of how different variables and data observations were removed to begin with was helpful, such as having 85% censoring and 50 final samples. Within section 3, *Results,* the paper is good at explaining how many false positive and negatives each model had and what they mean as far as practicality of the model. Table 4 provides a good key to otherwise confusing variables names, and Tables 5 and 6 were good summarizing tools that showcase all of the relevant statistics used and final model equations. I also think figures 2, 3, 4, and 5 are helpful in visualizing expected vs observed values and how the model performed based on this overall instead of just reading about false positives and negatives.
+
+### Weaknesses
+
+In section 2.4.3, there was some vagueness about model transformations and selection. They note that some variables were lagged, averaged, estimated, and transformed. Though we can see LAG and AVG in some variable names to know what they already did to those variables, it was unclear what transformations were done and why, as the paper only states that variables were transformed towards linearity (not normality). This made it difficult to test transformations without looking at what the final transformations were first. We were also left with questions about which step in the model building process the transformations were applied, for example, it could have been before or after analyzing either VIF, AICc, or PRESS. In addition, it was understood that 6 variables were chosen using AICc, but was confusing as to how they chose these 6 final variables and then selected a final model again based on PRESS if they had already narrowed it down. I also believe it would have been helpful to articulate how they eliminated variables with VIF as we could not get one of the final model variables to have a VIF \<5 yet had to keep it in. Finally, the paper comments multiple times that wind direction was used as a categorical variable but do not mention what these categories were. A natural conclusion would be North, East, South, and West, however, we found that there had to have only been two categories since the variable had only 1 degree of freedom. This made it difficult to work with wind direction, especially because it was included in the final model. Using this variable numerically instead of categorically seemed to work just fine with their process, but they should have have included more information about it.
+
+# Task 3: Guiding Principles for Statistical Writing
+
+-   Give an introduction that explains where and how data was gathered and what questions are trying to be answered
+-   Include a general summary of statistics, like mean or sample size, to give your audience an idea of what the overall data looks like
+-   Clearly state the dependent and independent variables used in the initial model
+-   Include what categories were used if any variables became categorical
+-   State significance levels and other metrics or thresholds used, such as using VIF \< 5
+-   Lay out the order of tasks done to choose the final model in a logical manner, such as removing NAs, selecting transformations, removing variables, and any other data cleaning done
+-   State summary statistics for the final, possibly using a table/visual to make it easy to read
+-   Include tables and plots to illustrate conclusions that might be confusing through narration only
+-   Carefully explain any visuals, making it clear what their purpose is
